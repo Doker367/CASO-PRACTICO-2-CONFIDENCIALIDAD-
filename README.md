@@ -190,14 +190,5 @@ python3 scripts/compliance-check.py   # auditoría de cumplimiento (raíz)
 - El registro de auditoría es append-only desde la aplicación; protege el acceso a la BD.
 - Los usuarios semilla son solo para demostración: elimínalos o cambia sus contraseñas fuera del aula.
 
-## Subir a GitHub
-
-```bash
-git init -b main            # si aún no hay repo
-git add .
-git commit -m "feat: app web RBAC con JWT, auditoría y Docker (Caso Práctico Seguridad en Cómputo)"
-git remote add origin https://github.com/<tu-usuario>/<tu-repo>.git
-git push -u origin main
-```
 
 `.env` está en `.gitignore` y **no se sube**: cada quien genera sus secretos con `openssl rand -base64 64`.
