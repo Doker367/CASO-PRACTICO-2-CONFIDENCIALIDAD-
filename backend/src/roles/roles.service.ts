@@ -32,33 +32,39 @@ export class RolesService {
     if (dto.permissionIds?.length) {
       await this.assertCanGrant(actor.id, dto.permissionIds);
     }
-    try {
-      const role = await this.prisma.role.create({
-        data: {
-          name: dto.name.trim(),
-          description: dto.description?.trim(),
-          permissions: dto.permissionIds?.length
-            ? {
-                create: dto.permissionIds.map((permissionId) => ({ permissionId })),
-              }
-            : undefined,
-        },
-        include: { permissions: { include: { permission: true } } },
+    return this.prisma
+      .$transaction(async (tx) => {
+        const role = await tx.role.create({
+          data: {
+            name: dto.name.trim(),
+            description: dto.description?.trim(),
+            permissions: dto.permissionIds?.length
+              ? {
+                  create: dto.permissionIds.map((permissionId) => ({ permissionId })),
+                }
+              : undefined,
+          },
+          include: { permissions: { include: { permission: true } } },
+        });
+        await this.audit.record(
+          {
+            userId: actor.id,
+            email: actor.email,
+            action: 'roles.create',
+            resource: 'role',
+            resourceId: role.id,
+            detail: role.name,
+            ipAddress: ip,
+            userAgent: ua,
+          },
+          tx,
+        );
+        return role;
+      })
+      .catch((err: unknown) => {
+        if (err instanceof BadRequestException || err instanceof ForbiddenException) throw err;
+        throw new ConflictException('El rol ya existe');
       });
-      await this.audit.record({
-        userId: actor.id,
-        email: actor.email,
-        action: 'roles.create',
-        resource: 'role',
-        resourceId: role.id,
-        detail: role.name,
-        ipAddress: ip,
-        userAgent: ua,
-      });
-      return role;
-    } catch {
-      throw new ConflictException('El rol ya existe');
-    }
   }
 
   async update(
@@ -72,29 +78,35 @@ export class RolesService {
     if (role.isSystem && dto.name && dto.name !== role.name) {
       throw new BadRequestException('Los roles del sistema no pueden renombrarse');
     }
-    try {
-      const updated = await this.prisma.role.update({
-        where: { id },
-        data: {
-          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-          ...(dto.description !== undefined ? { description: dto.description?.trim() } : {}),
-        },
-        include: { permissions: { include: { permission: true } } },
+    return this.prisma
+      .$transaction(async (tx) => {
+        const updated = await tx.role.update({
+          where: { id },
+          data: {
+            ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+            ...(dto.description !== undefined ? { description: dto.description?.trim() } : {}),
+          },
+          include: { permissions: { include: { permission: true } } },
+        });
+        await this.audit.record(
+          {
+            userId: actor.id,
+            email: actor.email,
+            action: 'roles.update',
+            resource: 'role',
+            resourceId: id,
+            detail: updated.name,
+            ipAddress: ip,
+            userAgent: ua,
+          },
+          tx,
+        );
+        return updated;
+      })
+      .catch((err: unknown) => {
+        if (err instanceof BadRequestException || err instanceof ForbiddenException) throw err;
+        throw new ConflictException('El nombre del rol ya está en uso');
       });
-      await this.audit.record({
-        userId: actor.id,
-        email: actor.email,
-        action: 'roles.update',
-        resource: 'role',
-        resourceId: id,
-        detail: updated.name,
-        ipAddress: ip,
-        userAgent: ua,
-      });
-      return updated;
-    } catch {
-      throw new ConflictException('El nombre del rol ya está en uso');
-    }
   }
 
   async setPermissions(
@@ -119,22 +131,24 @@ export class RolesService {
       }
     }
 
-    await this.prisma.$transaction([
-      this.prisma.rolePermission.deleteMany({ where: { roleId: id } }),
-      this.prisma.rolePermission.createMany({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.rolePermission.deleteMany({ where: { roleId: id } });
+      await tx.rolePermission.createMany({
         data: dto.permissionIds.map((permissionId) => ({ roleId: id, permissionId })),
-      }),
-    ]);
-
-    await this.audit.record({
-      userId: actor.id,
-      email: actor.email,
-      action: 'roles.set_permissions',
-      resource: 'role',
-      resourceId: id,
-      detail: perms.map((p) => p.code).join(', '),
-      ipAddress: ip,
-      userAgent: ua,
+      });
+      await this.audit.record(
+        {
+          userId: actor.id,
+          email: actor.email,
+          action: 'roles.set_permissions',
+          resource: 'role',
+          resourceId: id,
+          detail: perms.map((p) => p.code).join(', '),
+          ipAddress: ip,
+          userAgent: ua,
+        },
+        tx,
+      );
     });
     return this.findOrThrow(id);
   }
@@ -144,16 +158,21 @@ export class RolesService {
     if (role.isSystem || SYSTEM_ROLES.includes(role.name)) {
       throw new BadRequestException('No se pueden eliminar roles del sistema');
     }
-    await this.prisma.role.delete({ where: { id } });
-    await this.audit.record({
-      userId: actor.id,
-      email: actor.email,
-      action: 'roles.delete',
-      resource: 'role',
-      resourceId: id,
-      detail: role.name,
-      ipAddress: ip,
-      userAgent: ua,
+    await this.prisma.$transaction(async (tx) => {
+      await tx.role.delete({ where: { id } });
+      await this.audit.record(
+        {
+          userId: actor.id,
+          email: actor.email,
+          action: 'roles.delete',
+          resource: 'role',
+          resourceId: id,
+          detail: role.name,
+          ipAddress: ip,
+          userAgent: ua,
+        },
+        tx,
+      );
     });
   }
 

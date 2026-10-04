@@ -66,22 +66,27 @@ export class AuthService {
     }
     const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
     const defaultRole = await this.prisma.role.findUnique({ where: { name: 'Usuario Regular' } });
-    const user = await this.prisma.user.create({
-      data: {
-        name: dto.name.trim(),
-        email,
-        passwordHash,
-        roles: defaultRole ? { create: { roleId: defaultRole.id } } : undefined,
-      },
-    });
-    await this.audit.record({
-      userId: user.id,
-      email: user.email,
-      action: 'auth.register',
-      resource: 'user',
-      resourceId: user.id,
-      ipAddress: ip,
-      userAgent,
+    await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          name: dto.name.trim(),
+          email,
+          passwordHash,
+          roles: defaultRole ? { create: { roleId: defaultRole.id } } : undefined,
+        },
+      });
+      await this.audit.record(
+        {
+          userId: user.id,
+          email: user.email,
+          action: 'auth.register',
+          resource: 'user',
+          resourceId: user.id,
+          ipAddress: ip,
+          userAgent,
+        },
+        tx,
+      );
     });
   }
 
@@ -144,17 +149,22 @@ export class AuthService {
     }
 
     await this.redis.del(lockKey);
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { failedAttempts: 0, lockedUntil: null },
-    });
-    await this.audit.record({
-      userId: user.id,
-      email,
-      action: 'auth.login.success',
-      resource: 'auth',
-      ipAddress: ip,
-      userAgent,
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: { failedAttempts: 0, lockedUntil: null },
+      });
+      await this.audit.record(
+        {
+          userId: user.id,
+          email,
+          action: 'auth.login.success',
+          resource: 'auth',
+          ipAddress: ip,
+          userAgent,
+        },
+        tx,
+      );
     });
     return this.buildSession(user, ip, userAgent);
   }
@@ -168,30 +178,71 @@ export class AuthService {
 
   async refresh(userId: string, tokenHash: string, ip: string, userAgent?: string) {
     const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
-    if (!stored || stored.userId !== userId || stored.revokedAt || stored.expiresAt < new Date()) {
+    if (!stored || stored.userId !== userId || stored.expiresAt < new Date()) {
       throw new UnauthorizedException('Refresh token inválido o expirado');
     }
+
+    // Reutilización de un refresh token ya rotado/revocado => posible robo de token:
+    // se revoca toda la familia de sesiones del usuario y se registra el evento.
+    if (stored.revokedAt) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.refreshToken.updateMany({
+          where: { userId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        await this.audit.record(
+          {
+            userId,
+            action: 'auth.refresh.reuse_detected',
+            resource: 'auth',
+            detail: 'refresh token reutilizado; todas las sesiones fueron revocadas',
+            ipAddress: ip,
+            userAgent,
+          },
+          tx,
+        );
+      });
+      throw new UnauthorizedException('Sesión invalidada por reutilización de token');
+    }
+
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user || !user.isActive) throw new UnauthorizedException('Cuenta inactiva');
 
-    await this.prisma.refreshToken.update({
-      where: { id: stored.id },
-      data: { revokedAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.refreshToken.update({
+        where: { id: stored.id },
+        data: { revokedAt: new Date() },
+      });
+      await this.audit.record(
+        {
+          userId,
+          action: 'auth.refresh.rotated',
+          resource: 'auth',
+          ipAddress: ip,
+          userAgent,
+        },
+        tx,
+      );
     });
     return this.buildSession(user, ip, userAgent);
   }
 
   async logout(userId: string, tokenHash: string, ip: string, userAgent?: string) {
-    await this.prisma.refreshToken.updateMany({
-      where: { tokenHash, userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-    await this.audit.record({
-      userId,
-      action: 'auth.logout',
-      resource: 'auth',
-      ipAddress: ip,
-      userAgent,
+    await this.prisma.$transaction(async (tx) => {
+      await tx.refreshToken.updateMany({
+        where: { tokenHash, userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await this.audit.record(
+        {
+          userId,
+          action: 'auth.logout',
+          resource: 'auth',
+          ipAddress: ip,
+          userAgent,
+        },
+        tx,
+      );
     });
   }
 
@@ -200,19 +251,24 @@ export class AuthService {
     const ok = await argon2.verify(user.passwordHash, dto.currentPassword).catch(() => false);
     if (!ok) throw new BadRequestException('La contraseña actual es incorrecta');
     const passwordHash = await argon2.hash(dto.newPassword, { type: argon2.argon2id });
-    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
-    await this.prisma.refreshToken.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-    await this.audit.record({
-      userId,
-      email: user.email,
-      action: 'auth.change_password',
-      resource: 'user',
-      resourceId: userId,
-      ipAddress: ip,
-      userAgent,
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { passwordHash } });
+      await tx.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await this.audit.record(
+        {
+          userId,
+          email: user.email,
+          action: 'auth.change_password',
+          resource: 'user',
+          resourceId: userId,
+          ipAddress: ip,
+          userAgent,
+        },
+        tx,
+      );
     });
   }
 
@@ -231,12 +287,26 @@ export class AuthService {
     if (!user || !user.isActive) return;
 
     const token = crypto.randomBytes(32).toString('base64url');
-    await this.prisma.passwordReset.create({
-      data: {
-        tokenHash: hashToken(token),
-        userId: user.id,
-        expiresAt: new Date(Date.now() + RESET_TTL_MINUTES * 60 * 1000),
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.passwordReset.create({
+        data: {
+          tokenHash: hashToken(token),
+          userId: user.id,
+          expiresAt: new Date(Date.now() + RESET_TTL_MINUTES * 60 * 1000),
+        },
+      });
+      await this.audit.record(
+        {
+          userId: user.id,
+          email: user.email,
+          action: 'auth.forgot_password.issued',
+          resource: 'user',
+          resourceId: user.id,
+          ipAddress: ip,
+          userAgent,
+        },
+        tx,
+      );
     });
     await this.mail.sendPasswordReset(user.email, token);
   }
@@ -248,24 +318,27 @@ export class AuthService {
       throw new BadRequestException('El enlace de recuperación es inválido o expiró');
     }
     const passwordHash = await argon2.hash(dto.newPassword, { type: argon2.argon2id });
-    await this.prisma.$transaction([
-      this.prisma.user.update({ where: { id: record.userId }, data: { passwordHash } }),
-      this.prisma.passwordReset.update({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
+      await tx.passwordReset.update({
         where: { id: record.id },
         data: { usedAt: new Date() },
-      }),
-      this.prisma.refreshToken.updateMany({
+      });
+      await tx.refreshToken.updateMany({
         where: { userId: record.userId, revokedAt: null },
         data: { revokedAt: new Date() },
-      }),
-    ]);
-    await this.audit.record({
-      userId: record.userId,
-      action: 'auth.reset_password',
-      resource: 'user',
-      resourceId: record.userId,
-      ipAddress: ip,
-      userAgent,
+      });
+      await this.audit.record(
+        {
+          userId: record.userId,
+          action: 'auth.reset_password',
+          resource: 'user',
+          resourceId: record.userId,
+          ipAddress: ip,
+          userAgent,
+        },
+        tx,
+      );
     });
   }
 

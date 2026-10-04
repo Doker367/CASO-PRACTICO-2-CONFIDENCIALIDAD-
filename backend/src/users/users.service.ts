@@ -70,22 +70,24 @@ export class UsersService {
       }
     }
 
-    await this.prisma.$transaction([
-      this.prisma.userRole.deleteMany({ where: { userId: id } }),
-      this.prisma.userRole.createMany({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.userRole.deleteMany({ where: { userId: id } });
+      await tx.userRole.createMany({
         data: dto.roleIds.map((roleId) => ({ userId: id, roleId })),
-      }),
-    ]);
-
-    await this.audit.record({
-      userId: actor.id,
-      email: actor.email,
-      action: 'users.set_roles',
-      resource: 'user',
-      resourceId: id,
-      detail: roles.map((r) => r.name).join(', '),
-      ipAddress: ip,
-      userAgent: ua,
+      });
+      await this.audit.record(
+        {
+          userId: actor.id,
+          email: actor.email,
+          action: 'users.set_roles',
+          resource: 'user',
+          resourceId: id,
+          detail: roles.map((r) => r.name).join(', '),
+          ipAddress: ip,
+          userAgent: ua,
+        },
+        tx,
+      );
     });
 
     return this.findOne(id);
@@ -104,24 +106,29 @@ export class UsersService {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
-    await this.prisma.user.update({
-      where: { id },
-      data: { isActive: dto.isActive, lockedUntil: null, failedAttempts: 0 },
-    });
-    if (!dto.isActive) {
-      await this.prisma.refreshToken.updateMany({
-        where: { userId: id, revokedAt: null },
-        data: { revokedAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: { isActive: dto.isActive, lockedUntil: null, failedAttempts: 0 },
       });
-    }
-    await this.audit.record({
-      userId: actor.id,
-      email: actor.email,
-      action: dto.isActive ? 'users.enable' : 'users.disable',
-      resource: 'user',
-      resourceId: id,
-      ipAddress: ip,
-      userAgent: ua,
+      if (!dto.isActive) {
+        await tx.refreshToken.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+      await this.audit.record(
+        {
+          userId: actor.id,
+          email: actor.email,
+          action: dto.isActive ? 'users.enable' : 'users.disable',
+          resource: 'user',
+          resourceId: id,
+          ipAddress: ip,
+          userAgent: ua,
+        },
+        tx,
+      );
     });
     return this.findOne(id);
   }

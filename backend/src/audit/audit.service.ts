@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface AuditEntry {
@@ -12,29 +13,30 @@ export interface AuditEntry {
   userAgent?: string;
 }
 
+type Db = Prisma.TransactionClient | PrismaService;
+
 @Injectable()
 export class AuditService {
-  private readonly logger = new Logger(AuditService.name);
-
   constructor(private readonly prisma: PrismaService) {}
 
-  async record(entry: AuditEntry): Promise<void> {
-    try {
-      await this.prisma.auditLog.create({
-        data: {
-          userId: entry.userId,
-          email: entry.email,
-          action: entry.action,
-          resource: entry.resource,
-          resourceId: entry.resourceId,
-          detail: entry.detail,
-          ipAddress: entry.ipAddress,
-          userAgent: entry.userAgent,
-        },
-      });
-    } catch (err) {
-      this.logger.error('No se pudo registrar la auditoría', err as Error);
-    }
+  /**
+   * Escritura fail-closed: si la auditoría no puede registrarse, la operación
+   * asociada no debe considerarse completada. Pasa `tx` para escribir dentro de
+   * la misma transacción que el cambio de estado auditado.
+   */
+  async record(entry: AuditEntry, db: Db = this.prisma): Promise<void> {
+    await db.auditLog.create({
+      data: {
+        userId: entry.userId,
+        email: entry.email,
+        action: entry.action,
+        resource: entry.resource,
+        resourceId: entry.resourceId,
+        detail: entry.detail,
+        ipAddress: entry.ipAddress,
+        userAgent: entry.userAgent,
+      },
+    });
   }
 
   async findAll(page = 1, limit = 50) {

@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-rbac_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-RbacStrongPass2026}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}
       POSTGRES_DB: ${POSTGRES_DB:-rbac_app}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -36,7 +36,7 @@ services:
     build: ./backend
     env_file: ./.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-rbac_user}:${POSTGRES_PASSWORD:-RbacStrongPass2026}@postgres:5432/${POSTGRES_DB:-rbac_app}?schema=public
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rbac_user}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}@postgres:5432/${POSTGRES_DB:-rbac_app}?schema=public
       REDIS_URL: redis://redis:6379
       SMTP_HOST: mailhog
     depends_on:
@@ -56,7 +56,7 @@ services:
     build: ./backend
     env_file: ./.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-rbac_user}:${POSTGRES_PASSWORD:-RbacStrongPass2026}@postgres:5432/${POSTGRES_DB:-rbac_app}?schema=public
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rbac_user}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}@postgres:5432/${POSTGRES_DB:-rbac_app}?schema=public
     depends_on:
       api:
         condition: service_healthy

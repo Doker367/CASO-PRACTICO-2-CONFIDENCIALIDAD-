@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import * as argon2 from 'argon2';
+import * as crypto from 'crypto';
 
 const prisma = new PrismaClient();
 
@@ -93,35 +94,46 @@ async function main() {
     });
   }
 
-  console.log('[seed] Sincronizando usuarios demo...');
+  console.log('[seed] Sincronizando usuarios de demostración...');
   const adminRole = await prisma.role.findUniqueOrThrow({ where: { name: 'Administrador' } });
   const editorRole = await prisma.role.findUniqueOrThrow({ where: { name: 'Editor' } });
   const userRole = await prisma.role.findUniqueOrThrow({ where: { name: 'Usuario Regular' } });
 
+  // Las contraseñas NUNCA se fijan en el código fuente:
+  // - si existen SEED_*_PASSWORD en el entorno, se usan (quien despliega decide);
+  // - si no, se genera una aleatoria que se imprime UNA sola vez al crear la cuenta.
   const users = [
-    { name: 'Administrador UNACH', email: 'admin@unach.mx', password: 'Admin123!', roleId: adminRole.id },
-    { name: 'Editor Contenidos', email: 'editor@unach.mx', password: 'Editor123!', roleId: editorRole.id },
-    { name: 'Usuario Regular', email: 'usuario@unach.mx', password: 'Usuario123!', roleId: userRole.id },
+    { name: 'Administrador UNACH', email: 'admin@unach.mx', env: 'SEED_ADMIN_PASSWORD', roleId: adminRole.id },
+    { name: 'Editor Contenidos', email: 'editor@unach.mx', env: 'SEED_EDITOR_PASSWORD', roleId: editorRole.id },
+    { name: 'Usuario Regular', email: 'usuario@unach.mx', env: 'SEED_USER_PASSWORD', roleId: userRole.id },
   ];
 
   for (const u of users) {
-    const passwordHash = await argon2.hash(u.password, { type: argon2.argon2id });
-    const user = await prisma.user.upsert({
-      where: { email: u.email },
-      update: { name: u.name, passwordHash },
-      create: { name: u.name, email: u.email, passwordHash },
-    });
-    await prisma.userRole.upsert({
-      where: { userId_roleId: { userId: user.id, roleId: u.roleId } },
-      update: {},
-      create: { userId: user.id, roleId: u.roleId },
-    });
+    const existing = await prisma.user.findUnique({ where: { email: u.email } });
+    if (!existing) {
+      const fromEnv = process.env[u.env];
+      const password = fromEnv && fromEnv.length >= 8 ? fromEnv : crypto.randomBytes(18).toString('base64url');
+      const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
+      const user = await prisma.user.create({
+        data: { name: u.name, email: u.email, passwordHash },
+      });
+      await prisma.userRole.create({ data: { userId: user.id, roleId: u.roleId } });
+      if (!fromEnv) {
+        console.log(`[seed] Credencial generada para ${u.email}: ${password}`);
+        console.log('[seed] Guárdala ahora; no se vuelve a mostrar.');
+      } else {
+        console.log(`[seed] Usuario ${u.email} creado con contraseña de ${u.env}.`);
+      }
+    } else {
+      await prisma.userRole.upsert({
+        where: { userId_roleId: { userId: existing.id, roleId: u.roleId } },
+        update: {},
+        create: { userId: existing.id, roleId: u.roleId },
+      });
+    }
   }
 
   console.log('[seed] Listo.');
-  console.log('  admin@unach.mx / Admin123!');
-  console.log('  editor@unach.mx / Editor123!');
-  console.log('  usuario@unach.mx / Usuario123!');
 }
 
 main()
