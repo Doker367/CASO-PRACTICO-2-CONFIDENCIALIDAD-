@@ -1,0 +1,82 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rbac_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-RbacStrongPass2026}
+      POSTGRES_DB: ${POSTGRES_DB:-rbac_app}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rbac_user} -d ${POSTGRES_DB:-rbac_app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [appnet]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [appnet]
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "8026:8025"
+    networks: [appnet]
+
+  api:
+    build: ./backend
+    env_file: ./.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rbac_user}:${POSTGRES_PASSWORD:-RbacStrongPass2026}@postgres:5432/${POSTGRES_DB:-rbac_app}?schema=public
+      REDIS_URL: redis://redis:6379
+      SMTP_HOST: mailhog
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [appnet]
+
+  seed:
+    build: ./backend
+    env_file: ./.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rbac_user}:${POSTGRES_PASSWORD:-RbacStrongPass2026}@postgres:5432/${POSTGRES_DB:-rbac_app}?schema=public
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["sh", "-c", "npx ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\",\"esModuleInterop\":true}' prisma/seed.ts"]
+    restart: "no"
+    networks: [appnet]
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+      - "8443:443"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [appnet]
+
+networks:
+  appnet:
+
+volumes:
+  pgdata:
+  redisdata:
