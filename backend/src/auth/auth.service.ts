@@ -1,8 +1,11 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -17,11 +20,23 @@ import { AuditService } from '../audit/audit.service';
 import { hashToken } from './strategies/jwt-refresh.strategy';
 import {
   ChangePasswordDto,
+  ConfirmTwoFactorDto,
+  DisableTwoFactorDto,
   ForgotPasswordDto,
   LoginDto,
   RegisterDto,
+  ResendTwoFactorDto,
   ResetPasswordDto,
+  VerifyTwoFactorDto,
 } from './dto/auth.dto';
+import {
+  OTP_MAX_ATTEMPTS,
+  OTP_TTL_SECONDS,
+  generateOtp,
+  hashOtp,
+  maskEmail,
+  verifyOtp,
+} from './two-factor.util';
 import { User } from '@prisma/client';
 
 const RESET_TTL_MINUTES = 30;
@@ -34,6 +49,7 @@ export class AuthService {
   private readonly accessTtl: string;
   private readonly refreshTtlDays: number;
   private readonly cookieSecure: boolean;
+  private readonly otpSecret: string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -48,6 +64,10 @@ export class AuthService {
     this.accessTtl = this.config.get<string>('JWT_ACCESS_TTL') ?? '15m';
     this.refreshTtlDays = Number(this.config.get('JWT_REFRESH_TTL_DAYS') ?? 7);
     this.cookieSecure = this.config.get<string>('COOKIE_SECURE') === 'true';
+    this.otpSecret =
+      this.config.get<string>('MFA_SECRET') ??
+      this.config.get<string>('JWT_SECRET') ??
+      crypto.randomBytes(32).toString('hex');
   }
 
   async register(dto: RegisterDto, ip: string, userAgent?: string) {
@@ -149,24 +169,327 @@ export class AuthService {
     }
 
     await this.redis.del(lockKey);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { failedAttempts: 0, lockedUntil: null },
+    });
+
+    // Segundo factor: la contraseña correcta NO emite sesión todavía.
+    if (user.twoFactorEnabled) {
+      await this.audit.record({
+        userId: user.id,
+        email,
+        action: 'auth.login.2fa_challenge',
+        resource: 'auth',
+        detail: 'Contraseña válida; se envió código al correo',
+        ipAddress: ip,
+        userAgent,
+      });
+      return this.startTwoFactorChallenge(user);
+    }
+
+    await this.audit.record({
+      userId: user.id,
+      email,
+      action: 'auth.login.success',
+      resource: 'auth',
+      ipAddress: ip,
+      userAgent,
+    });
+    return this.buildSession(user, ip, userAgent);
+  }
+
+  /** Identificador opaco del reto: en Redis nunca se guarda el token en claro. */
+  private challengeId(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private async startTwoFactorChallenge(user: User) {
+    const challengeToken = crypto.randomBytes(32).toString('base64url');
+    const id = this.challengeId(challengeToken);
+    const code = generateOtp();
+
+    await this.redis.set(
+      `mfa:login:${id}`,
+      JSON.stringify({ userId: user.id, email: user.email, attempts: 0 }),
+      OTP_TTL_SECONDS,
+    );
+    await this.redis.set(
+      `mfa:login:code:${id}`,
+      hashOtp(this.otpSecret, id, code),
+      OTP_TTL_SECONDS,
+    );
+
+    try {
+      await this.mail.sendTwoFactorCode(user.email, code, OTP_TTL_SECONDS / 60);
+    } catch (err) {
+      await this.redis.del(`mfa:login:${id}`);
+      await this.redis.del(`mfa:login:code:${id}`);
+      this.logger.error(`No se pudo enviar el código 2FA a ${user.email}`, err as Error);
+      throw new ServiceUnavailableException(
+        'No se pudo enviar el código de verificación. Intenta de nuevo.',
+      );
+    }
+
+    return {
+      mfaRequired: true,
+      challengeToken,
+      email: maskEmail(user.email),
+      expiresInSeconds: OTP_TTL_SECONDS,
+    };
+  }
+
+  async verifyTwoFactor(dto: VerifyTwoFactorDto, ip: string, userAgent?: string) {
+    const id = this.challengeId(dto.challengeToken);
+    const key = `mfa:login:${id}`;
+    const codeKey = `mfa:login:code:${id}`;
+    const raw = await this.redis.get(key);
+    const expected = await this.redis.get(codeKey);
+    if (!raw || !expected) {
+      throw new UnauthorizedException('Código inválido o expirado');
+    }
+
+    let challenge: { userId: string; email: string; attempts: number };
+    try {
+      challenge = JSON.parse(raw);
+    } catch {
+      await this.redis.del(key);
+      await this.redis.del(codeKey);
+      throw new UnauthorizedException('Código inválido o expirado');
+    }
+
+    if (!verifyOtp(this.otpSecret, id, dto.code.trim(), expected)) {
+      challenge.attempts += 1;
+      await this.audit.record({
+        userId: challenge.userId,
+        email: challenge.email,
+        action: 'auth.2fa.failed',
+        resource: 'auth',
+        detail: `Intento ${challenge.attempts} de ${OTP_MAX_ATTEMPTS}`,
+        ipAddress: ip,
+        userAgent,
+      });
+      if (challenge.attempts >= OTP_MAX_ATTEMPTS) {
+        await this.redis.del(key);
+        await this.redis.del(codeKey);
+        throw new UnauthorizedException(
+          'Demasiados intentos con el código. Inicia sesión de nuevo.',
+        );
+      }
+      const ttl = await this.redis.client.ttl(key);
+      await this.redis.set(key, JSON.stringify(challenge), ttl > 0 ? ttl : OTP_TTL_SECONDS);
+      throw new UnauthorizedException('Código inválido o expirado');
+    }
+
+    await this.redis.del(key);
+    await this.redis.del(codeKey);
+
+    const user = await this.prisma.user.findUnique({ where: { id: challenge.userId } });
+    if (!user || !user.isActive) throw new UnauthorizedException('Cuenta inactiva');
+
+    await this.audit.record({
+      userId: user.id,
+      email: user.email,
+      action: 'auth.login.success',
+      resource: 'auth',
+      detail: 'Segundo factor verificado',
+      ipAddress: ip,
+      userAgent,
+    });
+    return this.buildSession(user, ip, userAgent);
+  }
+
+  async resendTwoFactor(dto: ResendTwoFactorDto, ip: string, userAgent?: string) {
+    const id = this.challengeId(dto.challengeToken);
+    const key = `mfa:login:${id}`;
+    const codeKey = `mfa:login:code:${id}`;
+    const raw = await this.redis.get(key);
+    if (!raw) throw new UnauthorizedException('El reto expiró. Inicia sesión de nuevo.');
+
+    const cooldownKey = `mfa:login:resend:${id}`;
+    if (await this.redis.get(cooldownKey)) {
+      throw new HttpException(
+        'Espera un minuto antes de pedir otro código',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    await this.redis.set(cooldownKey, '1', 60);
+
+    const challenge = JSON.parse(raw) as { userId: string; email: string; attempts: number };
+    challenge.attempts = 0;
+    const code = generateOtp();
+    const ttl = await this.redis.client.ttl(key);
+    const remaining = ttl > 0 ? ttl : OTP_TTL_SECONDS;
+
+    await this.redis.set(key, JSON.stringify(challenge), remaining);
+    await this.redis.set(codeKey, hashOtp(this.otpSecret, id, code), remaining);
+    try {
+      await this.mail.sendTwoFactorCode(challenge.email, code, Math.ceil(remaining / 60));
+    } catch (err) {
+      this.logger.error(`No se pudo reenviar el código 2FA a ${challenge.email}`, err as Error);
+      throw new ServiceUnavailableException('No se pudo reenviar el código. Intenta de nuevo.');
+    }
+
+    await this.audit.record({
+      userId: challenge.userId,
+      email: challenge.email,
+      action: 'auth.2fa.resent',
+      resource: 'auth',
+      ipAddress: ip,
+      userAgent,
+    });
+    return {
+      message: 'Código reenviado',
+      email: maskEmail(challenge.email),
+      expiresInSeconds: remaining,
+    };
+  }
+
+  async twoFactorStatus(userId: string) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    return {
+      enabled: user.twoFactorEnabled,
+      method: 'email' as const,
+      email: maskEmail(user.email),
+      enabledAt: user.twoFactorEnabledAt,
+    };
+  }
+
+  /** Paso 1 de la activación: envía un código al correo ya registrado. */
+  async setupTwoFactor(userId: string, ip: string, userAgent?: string) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    if (!user.isActive) throw new ForbiddenException('Cuenta inactiva');
+    if (user.twoFactorEnabled) {
+      throw new BadRequestException('La verificación en dos pasos ya está activa');
+    }
+
+    const code = generateOtp();
+    await this.redis.set(
+      `mfa:setup:code:${userId}`,
+      hashOtp(this.otpSecret, `setup:${userId}`, code),
+      OTP_TTL_SECONDS,
+    );
+    await this.redis.del(`mfa:setup:attempts:${userId}`);
+
+    try {
+      await this.mail.sendTwoFactorCode(user.email, code, OTP_TTL_SECONDS / 60);
+    } catch (err) {
+      await this.redis.del(`mfa:setup:code:${userId}`);
+      this.logger.error(`No se pudo enviar el código de activación a ${user.email}`, err as Error);
+      throw new ServiceUnavailableException(
+        'No se pudo enviar el código de verificación. Intenta de nuevo.',
+      );
+    }
+
+    await this.audit.record({
+      userId,
+      email: user.email,
+      action: 'auth.2fa.setup_requested',
+      resource: 'user',
+      resourceId: userId,
+      ipAddress: ip,
+      userAgent,
+    });
+    return {
+      message: 'Código enviado al correo registrado',
+      email: maskEmail(user.email),
+      expiresInSeconds: OTP_TTL_SECONDS,
+    };
+  }
+
+  /** Paso 2: confirma el código y activa el segundo factor. */
+  async confirmTwoFactor(
+    userId: string,
+    dto: ConfirmTwoFactorDto,
+    ip: string,
+    userAgent?: string,
+    keepRefreshToken?: string,
+  ) {
+    const codeKey = `mfa:setup:code:${userId}`;
+    const expected = await this.redis.get(codeKey);
+    if (!expected) {
+      throw new BadRequestException('El código expiró. Solicita uno nuevo.');
+    }
+
+    const attempts = await this.redis.incr(
+      `mfa:setup:attempts:${userId}`,
+      OTP_TTL_SECONDS,
+    );
+    if (attempts > OTP_MAX_ATTEMPTS) {
+      await this.redis.del(codeKey);
+      await this.redis.del(`mfa:setup:attempts:${userId}`);
+      throw new BadRequestException('Demasiados intentos. Solicita un código nuevo.');
+    }
+    if (!verifyOtp(this.otpSecret, `setup:${userId}`, dto.code.trim(), expected)) {
+      throw new BadRequestException('Código inválido o expirado');
+    }
+
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
-        where: { id: user.id },
-        data: { failedAttempts: 0, lockedUntil: null },
+        where: { id: userId },
+        data: { twoFactorEnabled: true, twoFactorEnabledAt: new Date() },
       });
-      await this.audit.record(
-        {
-          userId: user.id,
-          email,
-          action: 'auth.login.success',
-          resource: 'auth',
+      // Al activar 2FA se revocan las demás sesiones; la actual se conserva.
+      await tx.refreshToken.updateMany({
+        where: {
+          userId,
+          revokedAt: null,
+          ...(keepRefreshToken ? { tokenHash: { not: hashToken(keepRefreshToken) } } : {}),
+        },
+        data: { revokedAt: new Date() },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId,
+          email: user.email,
+          action: 'auth.2fa.enabled',
+          resource: 'user',
+          resourceId: userId,
+          detail: 'Segundo factor por correo activado; otras sesiones revocadas',
           ipAddress: ip,
           userAgent,
         },
-        tx,
-      );
+      });
     });
-    return this.buildSession(user, ip, userAgent);
+    await this.redis.del(codeKey);
+    await this.redis.del(`mfa:setup:attempts:${userId}`);
+
+    return { enabled: true, method: 'email' as const };
+  }
+
+  async disableTwoFactor(
+    userId: string,
+    dto: DisableTwoFactorDto,
+    ip: string,
+    userAgent?: string,
+  ) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const ok = await argon2.verify(user.passwordHash, dto.password).catch(() => false);
+    if (!ok) throw new BadRequestException('La contraseña es incorrecta');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { twoFactorEnabled: false, twoFactorEnabledAt: null },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId,
+          email: user.email,
+          action: 'auth.2fa.disabled',
+          resource: 'user',
+          resourceId: userId,
+          detail: 'Segundo factor desactivado por el usuario',
+          ipAddress: ip,
+          userAgent,
+        },
+      });
+    });
+    await this.redis.del(`mfa:setup:code:${userId}`);
+    await this.redis.del(`mfa:setup:attempts:${userId}`);
+
+    return { enabled: false, method: 'email' as const };
   }
 
   private async registerFailure(email: string, ip: string) {

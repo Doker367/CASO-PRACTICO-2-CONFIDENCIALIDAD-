@@ -228,6 +228,13 @@ main {
   box-shadow: var(--shadow);
 }
 
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
 .card h1, .card h2, .card h3 { color: var(--text-strong); margin-top: 0; }
 .card h1 { font-size: 1.35rem; }
 .card h2 { font-size: 1.05rem; }
@@ -526,10 +533,133 @@ dialog.confirm {
 dialog.confirm::backdrop { background: rgb(8 47 73 / 0.45); }
 dialog.confirm h2 { margin-top: 0; color: var(--text-strong); }
 
+/* ===== Cifrado y firmas ===== */
+.flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.flow-step {
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: #f1f5f9;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.flow-step.strong { background: var(--primary-soft); color: var(--primary); border-color: rgb(3 105 161 / 0.2); font-weight: 600; }
+.flow-arrow { color: var(--secondary); font-weight: 700; }
+
+.crypto-info-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+.crypto-info-card { margin-bottom: 0; }
+.crypto-info-card h2 { margin: 0.5rem 0 0.35rem; }
+.crypto-info-card p { margin: 0 0 0.6rem; font-size: 0.86rem; }
+.pill-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+
+.key-facts {
+  margin: 0.4rem 0 0;
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+}
+.key-facts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 0.25rem;
+}
+.key-facts div:last-child { border-bottom: 0; padding-bottom: 0; }
+.key-facts dt { color: var(--muted); flex-shrink: 0; }
+.key-facts dd { margin: 0; text-align: right; color: var(--text-strong); }
+.key-facts.compact { font-size: 0.78rem; }
+.key-facts .break { overflow-wrap: anywhere; }
+
+details { margin-top: 0.6rem; }
+details > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--primary);
+  user-select: none;
+}
+details > summary:hover { color: var(--primary-hover); }
+
+pre {
+  margin: 0.45rem 0 0;
+  padding: 0.6rem 0.7rem;
+  background: #0b3a57;
+  color: #d7f0ff;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+}
+.public-key pre { max-height: 180px; }
+
+.note-card h2 { margin: 0; font-size: 1rem; }
+.note-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.crypto-columns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+.crypto-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.85rem;
+  min-width: 0;
+}
+.crypto-panel.plain { background: #f8fafc; }
+.crypto-panel.stored { background: #f0f9ff; border-color: rgb(3 105 161 / 0.2); }
+.crypto-panel h3 {
+  margin: 0 0 0.15rem;
+  font-size: 0.86rem;
+  color: var(--text-strong);
+}
+.crypto-panel .muted { font-size: 0.75rem; }
+.note-body {
+  margin: 0.45rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 0.9rem;
+}
+.note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
 /* ===== Responsive: tablet ===== */
 @media (min-width: 560px) {
   .form-row { grid-template-columns: 1fr 1fr; }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .crypto-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .user-chip .meta { display: flex; }
   main { padding: 1.4rem 1.5rem; }
 }
@@ -542,6 +672,7 @@ dialog.confirm h2 { margin-top: 0; color: var(--text-strong); }
   .menu-btn { display: none; }
   .shell { margin-left: var(--sidebar-w); }
   .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .crypto-columns { grid-template-columns: 1fr 1fr; }
   .topbar { padding: 0 1.5rem; }
   main { padding: 1.5rem 1.75rem 2rem; }
 }

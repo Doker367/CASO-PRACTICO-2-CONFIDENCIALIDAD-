@@ -13,6 +13,8 @@ import { ProductsModule } from './products/products.module';
 import { CategoriesModule } from './categories/categories.module';
 import { AuditModule } from './audit/audit.module';
 import { HealthModule } from './health/health.module';
+import { CryptoModule } from './crypto/crypto.module';
+import { SecureNotesModule } from './secure-notes/secure-notes.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 
@@ -33,6 +35,8 @@ import { PermissionsGuard } from './common/guards/permissions.guard';
     PrismaModule,
     RedisModule,
     MailModule,
+    CryptoModule,
+    SecureNotesModule,
     AuthModule,
     UsersModule,
     RolesModule,

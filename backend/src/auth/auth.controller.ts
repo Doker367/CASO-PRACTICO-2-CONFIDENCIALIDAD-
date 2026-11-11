@@ -18,10 +18,14 @@ import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
 import {
   ChangePasswordDto,
+  ConfirmTwoFactorDto,
+  DisableTwoFactorDto,
   ForgotPasswordDto,
   LoginDto,
   RegisterDto,
+  ResendTwoFactorDto,
   ResetPasswordDto,
+  VerifyTwoFactorDto,
 } from './dto/auth.dto';
 
 interface RefreshRequest extends Request {
@@ -59,8 +63,81 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const session = await this.auth.login(dto, ip, req.headers['user-agent']);
+    // Con 2FA activo no hay sesión todavía: se devuelve el reto y el código va por correo.
+    if ('mfaRequired' in session) return session;
     this.auth.setRefreshCookie(res, session.refreshToken);
     return { accessToken: session.accessToken, user: session.user };
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Post('2fa/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyTwoFactor(
+    @Body() dto: VerifyTwoFactorDto,
+    @Ip() ip: string,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const session = await this.auth.verifyTwoFactor(dto, ip, req.headers['user-agent']);
+    this.auth.setRefreshCookie(res, session.refreshToken);
+    return { accessToken: session.accessToken, user: session.user };
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('2fa/resend')
+  @HttpCode(HttpStatus.OK)
+  async resendTwoFactor(
+    @Body() dto: ResendTwoFactorDto,
+    @Ip() ip: string,
+    @Req() req: Request,
+  ) {
+    return this.auth.resendTwoFactor(dto, ip, req.headers['user-agent']);
+  }
+
+  @Get('2fa/status')
+  @HttpCode(HttpStatus.OK)
+  twoFactorStatus(@CurrentUser() user: AuthUser) {
+    return this.auth.twoFactorStatus(user.id);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('2fa/setup')
+  @HttpCode(HttpStatus.OK)
+  setupTwoFactor(@CurrentUser() user: AuthUser, @Ip() ip: string, @Req() req: Request) {
+    return this.auth.setupTwoFactor(user.id, ip, req.headers['user-agent']);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Post('2fa/confirm')
+  @HttpCode(HttpStatus.OK)
+  confirmTwoFactor(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: ConfirmTwoFactorDto,
+    @Ip() ip: string,
+    @Req() req: Request,
+  ) {
+    const cookies = req.cookies as Record<string, string | undefined> | undefined;
+    return this.auth.confirmTwoFactor(
+      user.id,
+      dto,
+      ip,
+      req.headers['user-agent'],
+      cookies?.refreshToken,
+    );
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('2fa/disable')
+  @HttpCode(HttpStatus.OK)
+  disableTwoFactor(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: DisableTwoFactorDto,
+    @Ip() ip: string,
+    @Req() req: Request,
+  ) {
+    return this.auth.disableTwoFactor(user.id, dto, ip, req.headers['user-agent']);
   }
 
   @Public()

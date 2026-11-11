@@ -13,6 +13,9 @@ model User {
   email          String    @unique
   passwordHash   String    @map("password_hash")
   isActive       Boolean   @default(true) @map("is_active")
+  /// Segundo factor por correo: se activa desde "Mi cuenta".
+  twoFactorEnabled   Boolean   @default(false) @map("two_factor_enabled")
+  twoFactorEnabledAt DateTime? @map("two_factor_enabled_at")
   failedAttempts Int       @default(0) @map("failed_attempts")
   lockedUntil    DateTime? @map("locked_until")
   createdAt      DateTime  @default(now()) @map("created_at")
@@ -22,6 +25,7 @@ model User {
   auditLogs      AuditLog[]       @relation("AuditUser")
   refreshTokens  RefreshToken[]
   passwordResets PasswordReset[]
+  secureNotes    SecureNote[]
 
   @@map("users")
 }
@@ -98,6 +102,25 @@ model Product {
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@map("products")
+}
+
+/// Nota privada del usuario. El cuerpo NUNCA se guarda en claro: se cifra en
+/// la API con AES-256-GCM y se firma con RSA-PSS antes de persistirse.
+model SecureNote {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  title           String
+  bodyEncrypted   String   @map("body_encrypted") @db.Text
+  signature       String   @db.Text
+  encryptionKeyId String   @map("encryption_key_id")
+  signingKeyId    String   @map("signing_key_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("secure_notes")
 }
 
 model AuditLog {

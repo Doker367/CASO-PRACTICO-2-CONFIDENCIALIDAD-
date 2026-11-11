@@ -6,6 +6,20 @@ export interface AuthUser {
   permissions: string[];
 }
 
+export interface TwoFactorStatus {
+  enabled: boolean;
+  method: 'email';
+  email: string;
+  enabledAt: string | null;
+}
+
+export interface TwoFactorChallenge {
+  mfaRequired: true;
+  challengeToken: string;
+  email: string;
+  expiresInSeconds: number;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -64,4 +78,53 @@ export interface AuditRow {
   ipAddress: string;
   userAgent: string | null;
   createdAt: string;
+}
+
+export interface CryptoInfo {
+  encryption: {
+    algorithm: string;
+    keyId: string;
+    keySource: 'environment' | 'file';
+  };
+  signing: {
+    algorithm: string;
+    hash: string;
+    keyId: string;
+    modulusLength: number;
+    publicKeyPem: string;
+  };
+}
+
+export interface SecureNote {
+  id: string;
+  title: string;
+  body: string | null;
+  createdAt: string;
+  updatedAt: string;
+  status: 'ok' | 'decryption_error';
+  error?: string;
+  stored: {
+    column: string;
+    value: string;
+    decoded: {
+      v: number;
+      alg: string;
+      keyId: string;
+      iv: string;
+      tag: string;
+      ciphertext: string;
+    } | null;
+  };
+  encryption: {
+    algorithm: string;
+    keyId: string;
+    aad: string;
+  };
+  signature: {
+    algorithm: string;
+    hash: string;
+    keyId: string;
+    value: string;
+    valid: boolean;
+  };
 }

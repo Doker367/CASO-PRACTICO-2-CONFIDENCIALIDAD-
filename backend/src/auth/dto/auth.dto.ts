@@ -1,4 +1,12 @@
-import { IsEmail, IsString, IsOptional, MinLength, MaxLength, Matches } from 'class-validator';
+import {
+  IsEmail,
+  IsString,
+  IsOptional,
+  Length,
+  Matches,
+  MinLength,
+  MaxLength,
+} from 'class-validator';
 
 const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{8,72}$/;
 const PASSWORD_MESSAGE =
@@ -65,4 +73,37 @@ export class RefreshDto {
   @IsOptional()
   @IsString()
   refreshToken?: string;
+}
+
+export class VerifyTwoFactorDto {
+  @IsString()
+  @MinLength(20)
+  @MaxLength(200)
+  challengeToken: string;
+
+  @IsString()
+  @Length(6, 6)
+  @Matches(/^\d{6}$/, { message: 'El código debe tener 6 dígitos' })
+  code: string;
+}
+
+export class ResendTwoFactorDto {
+  @IsString()
+  @MinLength(20)
+  @MaxLength(200)
+  challengeToken: string;
+}
+
+export class ConfirmTwoFactorDto {
+  @IsString()
+  @Length(6, 6)
+  @Matches(/^\d{6}$/, { message: 'El código debe tener 6 dígitos' })
+  code: string;
+}
+
+export class DisableTwoFactorDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(72)
+  password: string;
 }

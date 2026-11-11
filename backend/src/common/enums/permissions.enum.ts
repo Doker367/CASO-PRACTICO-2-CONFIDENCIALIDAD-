@@ -11,4 +11,6 @@ export enum PermissionCode {
   RolesManage = 'roles:manage',
   PermissionsRead = 'permissions:read',
   AuditRead = 'audit:read',
+  NotesRead = 'notes:read',
+  NotesManage = 'notes:manage',
 }

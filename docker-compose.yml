@@ -39,6 +39,12 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-rbac_user}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}@postgres:5432/${POSTGRES_DB:-rbac_app}?schema=public
       REDIS_URL: redis://redis:6379
       SMTP_HOST: mailhog
+      # Llaves montadas como archivos de solo lectura (nunca en la imagen).
+      DATA_ENCRYPTION_KEY_FILE: /run/secrets/data-encryption.key
+      NOTES_SIGNING_PRIVATE_KEY_PATH: /run/secrets/notes-signing-private.pem
+      NOTES_SIGNING_PUBLIC_KEY_PATH: /run/secrets/notes-signing-public.pem
+    volumes:
+      - ./secrets:/run/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy

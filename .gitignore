@@ -12,3 +12,5 @@ nginx/certs/*.pem
 nginx/certs/*.key
 nginx/certs/*.crt
 tsconfig.tsbuildinfo
+secrets/*
+!secrets/README.md

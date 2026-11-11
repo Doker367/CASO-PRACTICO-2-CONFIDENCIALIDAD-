@@ -1,8 +1,12 @@
 # Caso Práctico – Confidencialidad | Seguridad en Cómputo (UNACH)
 
-Aplicación web con **gestión de roles y permisos**, **API REST protegida con JWT** sobre **HTTPS**, frontend React y despliegue **Dockerizado**.
+Aplicación web con **gestión de roles y permisos**, **API REST protegida con JWT** sobre **HTTPS**, **verificación en dos pasos (2FA) por correo**, **cifrado simétrico de datos sensibles (AES-256-GCM)** y **firma digital (RSA-PSS)**, frontend React y despliegue **Dockerizado**.
 
-> **Resultado de la auditoría automatizada: 48/48 comprobaciones OK** (`python3 scripts/compliance-check.py`)
+> **Resultado de la auditoría automatizada: 49/49 comprobaciones OK** (`python3 scripts/compliance-check.py`)
+>
+> **Criptografía aplicada:** ver [`docs/CRIPTOGRAFIA.md`](docs/CRIPTOGRAFIA.md) para el flujo completo, el manejo de llaves y el guion de demo.
+>
+> **Doble autenticación por correo:** ver [`docs/DOBLE-FACTOR.md`](docs/DOBLE-FACTOR.md).
 
 ## Stack tecnológico
 
@@ -13,20 +17,29 @@ Aplicación web con **gestión de roles y permisos**, **API REST protegida con J
 | Base de datos | PostgreSQL 16 + Prisma ORM |
 | Cache / anti-fuerza-bruta | Redis 7 |
 | Autenticación | JWT HS256 (access 15 min + refresh 7 días rotatorio) |
+| Segundo factor (2FA) | Código de 6 dígitos por correo (HMAC-SHA-256, TTL 10 min, 5 intentos) |
 | Hash de contraseñas | Argon2id |
+| Cifrado de datos | AES-256-GCM (módulo `crypto` de Node.js/OpenSSL) |
+| Firma digital | RSA-PSS + SHA-256 (RSA-3072) |
 | TLS | nginx con TLS 1.2/1.3 + HSTS (cert self-signed para demo) |
-| Correo (recuperación) | MailHog (dev/demo) |
+| Correo (2FA y recuperación) | MailHog (dev/demo) |
 | Despliegue | Docker Compose |
 
 ## Arranque rápido
 
 ```bash
 cp .env.example .env
-# OBLIGATORIO: generar secretos fuertes y pegarlos en .env (JWT_SECRET y JWT_REFRESH_SECRET)
-#   openssl rand -base64 64
-# La API se niega a arrancar con secretos placeholder o de menos de 32 caracteres.
+# 1) OBLIGATORIO: generar secretos JWT fuertes y pegarlos en .env (JWT_SECRET y JWT_REFRESH_SECRET)
+#      openssl rand -base64 64
+#    La API se niega a arrancar con secretos placeholder o de menos de 32 caracteres.
+# 2) Generar las llaves de cifrado y firma (no se suben al repo):
+node scripts/generate-crypto-keys.mjs
 docker compose up --build
 ```
+
+> Las llaves quedan en `secrets/` con permisos restringidos (`600` para la clave
+> AES y la llave privada RSA). Docker Compose las monta como solo lectura en
+> `/run/secrets`. Sin ellas la API no arranca.
 
 | Servicio | URL |
 |---|---|
@@ -44,6 +57,7 @@ docker compose up --build
 | Administrador | `admin@unach.mx` | `Admin123!` |
 | Editor | `editor@unach.mx` | `Editor123!` |
 | Usuario Regular | `usuario@unach.mx` | `Usuario123!` |
+| Demo 2FA por correo | `2fa@unach.mx` | `Doble123!` |
 
 ## Arquitectura
 
@@ -58,13 +72,21 @@ Navegador ──HTTPS──► nginx TLS (:8443) ──► Frontend React (SPA)
 - El frontend **nunca** accede a la base de datos: consume exclusivamente la API REST en JSON.
 - Toda comunicación cliente-servidor va por **HTTPS** (TLS termina en nginx).
 - El access token vive solo en **memoria** del cliente; el refresh token va en cookie **HttpOnly + Secure + SameSite=Strict** (nunca en `localStorage`).
+- Las notas privadas se cifran con **AES-256-GCM** y se firman con **RSA-PSS** antes de guardarse; la API descifra al leer y verifica la firma. Ver [`docs/CRIPTOGRAFIA.md`](docs/CRIPTOGRAFIA.md).
+- Con **2FA activo**, el login con contraseña devuelve solo un reto; la sesión (JWT) se emite hasta verificar el código de 6 dígitos enviado por correo. El código se guarda como HMAC-SHA-256 en Redis, nunca en claro. Ver [`docs/DOBLE-FACTOR.md`](docs/DOBLE-FACTOR.md).
 
 ## API REST principal
 
 | Método | Ruta | Permiso |
 |---|---|---|
 | POST | `/api/v1/auth/register` | público |
-| POST | `/api/v1/auth/login` | público (devuelve JWT) |
+| POST | `/api/v1/auth/login` | público (JWT o reto 2FA) |
+| POST | `/api/v1/auth/2fa/verify` | público (reto + código) |
+| POST | `/api/v1/auth/2fa/resend` | público (reto, 1/min) |
+| GET | `/api/v1/auth/2fa/status` | autenticado |
+| POST | `/api/v1/auth/2fa/setup` | autenticado |
+| POST | `/api/v1/auth/2fa/confirm` | autenticado |
+| POST | `/api/v1/auth/2fa/disable` | autenticado (contraseña) |
 | POST | `/api/v1/auth/refresh` | cookie refresh |
 | POST | `/api/v1/auth/logout` | cookie refresh |
 | POST | `/api/v1/auth/change-password` | autenticado |
@@ -79,6 +101,9 @@ Navegador ──HTTPS──► nginx TLS (:8443) ──► Frontend React (SPA)
 | **PUT** | `/api/v1/roles/:id/permissions` | `roles:manage` |
 | GET | `/api/v1/permissions` | `permissions:read` |
 | GET | `/api/v1/audit` | `audit:read` (solo lectura) |
+| GET/POST/DELETE | `/api/v1/secure-notes` | `notes:read` / `notes:manage` (propias) |
+| GET | `/api/v1/secure-notes/:id/verify` | `notes:read` (propia) |
+| GET | `/api/v1/secure-notes/crypto-info` | `notes:read` (llave pública y algoritmos) |
 
 ## Matriz de permisos por rol (semilla)
 
@@ -89,12 +114,13 @@ Navegador ──HTTPS──► nginx TLS (:8443) ──► Frontend React (SPA)
 | `categories:write/delete` | ✓ | ✓ | — |
 | `users:read` / `users:manage` | ✓ | — | — |
 | `roles:manage` / `permissions:read` / `audit:read` | ✓ | — | — |
+| `notes:read` / `notes:manage` (solo notas propias) | ✓ | ✓ | ✓ |
 
 Los permisos se asignan **dinámicamente** desde el dashboard (Roles y permisos).
 
 ---
 
-## Cumplimiento de Requerimientos (auditoría 48/48)
+## Cumplimiento de Requerimientos (auditoría 49/49)
 
 Ejecuta la auditoría con el stack levantado:
 
@@ -156,6 +182,9 @@ python3 scripts/compliance-check.py
 | 8 | CORS solo orígenes autorizados | ✅ | `CORS_ORIGIN=https://localhost:8443` |
 | 9 | Principio de mínimo privilegio | ✅ | permisos granulares por recurso+acción |
 | 10 | Errores sin fuga de información | ✅ | `AllExceptionsFilter` (mensajes genéricos; stack solo en logs) |
+| 11 | Cifrado simétrico de datos sensibles | ✅ | **AES-256-GCM** en `secure_notes.body_encrypted`; llave en archivo `600`/env, no hardcodeada |
+| 12 | Firma asimétrica de una función real | ✅ | **RSA-PSS/SHA-256** sobre cada nota; verificación con llave pública (`/secure-notes/:id/verify`) |
+| 13 | Llaves fuera del código fuente | ✅ | `secrets/` montado solo lectura en `/run/secrets`; rutas por variables de entorno |
 
 ---
 
@@ -172,18 +201,50 @@ cd frontend && npm install
 npm run dev   # http://localhost:5173 con proxy a :3000
 ```
 
+> Para desarrollo local, genera las llaves con `node scripts/generate-crypto-keys.mjs`
+> desde la raíz. La API busca por defecto `secrets/data-encryption.key`,
+> `secrets/notes-signing-private.pem` y `secrets/notes-signing-public.pem`, o
+> respeta `DATA_ENCRYPTION_KEY_FILE`, `NOTES_SIGNING_PRIVATE_KEY_PATH` y
+> `NOTES_SIGNING_PUBLIC_KEY_PATH` si están definidas.
+
 ## Pruebas
 
 ```bash
 cd backend
-npm test                  # unitarias (guards, filtro de errores, hash)
+npm test                  # unitarias (guards, errores, hash, criptografía, OTP 2FA)
 npm run test:e2e          # e2e (requiere postgres y redis)
 python3 scripts/compliance-check.py   # auditoría de cumplimiento (raíz)
 ```
 
+`src/crypto/crypto.service.spec.ts` prueba el flujo cifrar→guardar→descifrar,
+la detección de alteraciones (GCM), el AAD y la firma/verificación RSA-PSS.
+
+Demo de extremo a extremo por terminal (con el stack levantado):
+
+```bash
+./scripts/crypto-demo.sh
+```
+
+El script detecta solo si hay un stack de Docker Compose en `https://localhost:8443`
+o un API local en `http://localhost:3000`, y muestra la fila real de PostgreSQL
+consultando el contenedor (`docker compose exec postgres psql`). Si usas una base
+local, exporta `DATABASE_URL` antes de ejecutarlo.
+
+Demo de extremo a extremo del segundo factor (lee el código real desde MailHog):
+
+```bash
+./scripts/two-factor-demo.sh
+```
+
+Si el usuario `2fa@unach.mx` aún no tiene 2FA activo, el script lo activa, vuelve
+a iniciar sesión, muestra el reto, rechaza un código incorrecto y por último
+verifica el código correcto para emitir la sesión. También puedes hacerlo desde
+la UI en **Mi cuenta → Verificación en dos pasos**.
+
 ## Notas de seguridad operativa
 
 - **Secretos JWT**: la API valida al arrancar que `JWT_SECRET`/`JWT_REFRESH_SECRET` existan, tengan ≥32 caracteres y no sean placeholders; si no, falla el arranque (no hay fallback embebido en el código).
+- **Llaves de cifrado/firma**: viven en `secrets/` (clave AES y llave privada RSA con permisos `600`) y se montan como solo lectura en `/run/secrets`. Nunca se hornean en la imagen ni se commitean. Rotarlas con `node scripts/generate-crypto-keys.mjs --force` invalida las notas anteriores; en producción usa un KMS/Vault y un plan de rotación.
 - El cert TLS autofirmado es solo para demo académica; en producción usa una CA pública.
 - El bloqueo por intentos fallidos está keyeado por (email, IP): un tercero no puede bloquear una cuenta ajena. Si te bloqueas a ti mismo: `docker compose exec redis redis-cli KEYS 'login:*'` y borra las claves correspondientes.
 - El registro devuelve siempre la misma respuesta (202) exista o no el correo, para evitar enumeración de cuentas.

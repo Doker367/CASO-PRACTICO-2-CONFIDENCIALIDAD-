@@ -12,9 +12,11 @@ import UsersPage from './pages/UsersPage';
 import RolesPage from './pages/RolesPage';
 import AuditPage from './pages/AuditPage';
 import ChangePasswordPage from './pages/ChangePasswordPage';
+import SecureNotesPage from './pages/SecureNotesPage';
 
 const TITLES: Record<string, string> = {
   '/products': 'Catálogo de productos',
+  '/security': 'Datos cifrados y firmados',
   '/admin/users': 'Usuarios registrados',
   '/admin/roles': 'Roles y permisos',
   '/admin/audit': 'Registro de auditoría',
@@ -22,7 +24,7 @@ const TITLES: Record<string, string> = {
 };
 
 export default function App() {
-  const { user, logout, has } = useAuth();
+  const { user, logout, has, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [drawer, setDrawer] = useState(false);
@@ -47,11 +49,20 @@ export default function App() {
 
   const nav: { to: string; label: string; icon: IconName; perm?: string }[] = [
     { to: '/products', label: 'Productos', icon: 'package' },
+    { to: '/security', label: 'Datos seguros', icon: 'lock', perm: 'notes:read' },
     { to: '/admin/users', label: 'Usuarios', icon: 'users', perm: 'users:read' },
     { to: '/admin/roles', label: 'Roles y permisos', icon: 'shield', perm: 'roles:manage' },
     { to: '/admin/audit', label: 'Auditoría', icon: 'scroll', perm: 'audit:read' },
     { to: '/account', label: 'Mi cuenta', icon: 'key' },
   ];
+
+  if (loading) {
+    return (
+      <main>
+        <div className="center">Cargando…</div>
+      </main>
+    );
+  }
 
   if (!user) {
     return (
@@ -157,6 +168,14 @@ export default function App() {
                 <RequireAuth>
                   <ProductsPage />
                 </RequireAuth>
+              }
+            />
+            <Route
+              path="/security"
+              element={
+                <RequirePermission permission="notes:read">
+                  <SecureNotesPage />
+                </RequirePermission>
               }
             />
             <Route

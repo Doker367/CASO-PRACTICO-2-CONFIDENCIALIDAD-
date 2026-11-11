@@ -17,6 +17,8 @@ const PERMISSIONS = [
   { code: 'roles:manage', area: 'roles', action: 'manage', description: 'Crear, modificar y eliminar roles y permisos' },
   { code: 'permissions:read', area: 'permissions', action: 'read', description: 'Visualizar catálogo de permisos' },
   { code: 'audit:read', area: 'audit', action: 'read', description: 'Consultar el registro de auditoría' },
+  { code: 'notes:read', area: 'notes', action: 'read', description: 'Leer notas privadas cifradas' },
+  { code: 'notes:manage', area: 'notes', action: 'manage', description: 'Crear y eliminar notas privadas cifradas' },
 ];
 
 const ROLES: Record<string, string[]> = {
@@ -29,8 +31,10 @@ const ROLES: Record<string, string[]> = {
     'categories:read',
     'categories:write',
     'categories:delete',
+    'notes:read',
+    'notes:manage',
   ],
-  'Usuario Regular': ['products:read', 'categories:read'],
+  'Usuario Regular': ['products:read', 'categories:read', 'notes:read', 'notes:manage'],
 };
 
 async function main() {
@@ -106,6 +110,7 @@ async function main() {
     { name: 'Administrador UNACH', email: 'admin@unach.mx', env: 'SEED_ADMIN_PASSWORD', roleId: adminRole.id },
     { name: 'Editor Contenidos', email: 'editor@unach.mx', env: 'SEED_EDITOR_PASSWORD', roleId: editorRole.id },
     { name: 'Usuario Regular', email: 'usuario@unach.mx', env: 'SEED_USER_PASSWORD', roleId: userRole.id },
+    { name: 'Demo Doble Factor', email: '2fa@unach.mx', env: 'SEED_2FA_PASSWORD', roleId: userRole.id },
   ];
 
   for (const u of users) {
