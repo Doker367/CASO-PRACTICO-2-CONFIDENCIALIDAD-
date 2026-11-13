@@ -19,7 +19,9 @@ type IconName =
   | 'info'
   | 'inbox'
   | 'user'
-  | 'category';
+  | 'category'
+  | 'eye'
+  | 'eye-off';
 
 const paths: Record<IconName, string> = {
   menu: 'M4 6h16M4 12h16M4 18h16',
@@ -43,6 +45,8 @@ const paths: Record<IconName, string> = {
   inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13l3.5 7v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7l3.5-7z',
   user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
   category: 'M4 6h6v6H4V6zm10 0h6v4h-6V6zM4 16h6v4H4v-4zm10-2h6v6h-6v-6z',
+  eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  'eye-off': 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22',
 };
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {

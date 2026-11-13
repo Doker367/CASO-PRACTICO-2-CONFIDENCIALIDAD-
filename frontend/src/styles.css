@@ -687,3 +687,86 @@ pre {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ===== Password Reset & Strength UI ===== */
+.input-with-action {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-with-action input {
+  padding-right: 2.6rem;
+  margin-bottom: 0.85rem;
+}
+.input-with-action .action-btn {
+  position: absolute;
+  right: 0.6rem;
+  top: calc(50% - 0.425rem);
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+.input-with-action .action-btn:hover {
+  color: var(--text-strong);
+  background: var(--bg);
+}
+.pwd-requirements {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.9rem;
+  margin: -0.3rem 0 0.9rem;
+  font-size: 0.8rem;
+}
+.pwd-requirements p {
+  margin: 0 0 0.4rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.pwd-requirements ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.pwd-requirements li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.pwd-requirements li svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.pwd-requirements li.valid {
+  color: #16a34a;
+  font-weight: 500;
+}
+.pwd-requirements li.invalid {
+  color: var(--muted);
+}
+.token-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.65rem;
+  font-size: 0.8rem;
+  margin-bottom: 0.85rem;
+}
+

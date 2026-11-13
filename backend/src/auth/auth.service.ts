@@ -611,6 +611,11 @@ export class AuthService {
 
     const token = crypto.randomBytes(32).toString('base64url');
     await this.prisma.$transaction(async (tx) => {
+      // Invalida tokens previos no utilizados para evitar solicitudes paralelas o reutilizaciones
+      await tx.passwordReset.updateMany({
+        where: { userId: user.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
       await tx.passwordReset.create({
         data: {
           tokenHash: hashToken(token),
@@ -631,29 +636,53 @@ export class AuthService {
         tx,
       );
     });
-    await this.mail.sendPasswordReset(user.email, token);
+
+    try {
+      await this.mail.sendPasswordReset(user.email, token);
+    } catch (err) {
+      this.logger.error(`Error enviando correo de recuperación a ${user.email}: ${(err as Error).message}`);
+    }
   }
 
   async resetPassword(dto: ResetPasswordDto, ip: string, userAgent?: string) {
     const tokenHash = hashToken(dto.token);
-    const record = await this.prisma.passwordReset.findUnique({ where: { tokenHash } });
+    const record = await this.prisma.passwordReset.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
     if (!record || record.usedAt || record.expiresAt < new Date()) {
       throw new BadRequestException('El enlace de recuperación es inválido o expiró');
     }
+    if (!record.user || !record.user.isActive) {
+      throw new BadRequestException('El usuario no existe o se encuentra inactivo');
+    }
+
     const passwordHash = await argon2.hash(dto.newPassword, { type: argon2.argon2id });
     await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
-      await tx.passwordReset.update({
-        where: { id: record.id },
+      // 1) Actualiza contraseña y restablece bloqueos/intentos fallidos en BD
+      await tx.user.update({
+        where: { id: record.userId },
+        data: {
+          passwordHash,
+          failedAttempts: 0,
+          lockedUntil: null,
+        },
+      });
+      // 2) Marca como usados todos los tokens pendientes de este usuario
+      await tx.passwordReset.updateMany({
+        where: { userId: record.userId, usedAt: null },
         data: { usedAt: new Date() },
       });
+      // 3) Revoca todas las sesiones activas (refresh tokens) para expulsar sesiones previas
       await tx.refreshToken.updateMany({
         where: { userId: record.userId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      // 4) Auditoría con el email del usuario
       await this.audit.record(
         {
           userId: record.userId,
+          email: record.user.email,
           action: 'auth.reset_password',
           resource: 'user',
           resourceId: record.userId,
@@ -663,6 +692,18 @@ export class AuthService {
         tx,
       );
     });
+
+    // 5) Desbloquea en Redis cualquier bloqueo temporal activo por fuerza bruta previa
+    const userEmail = record.user.email.toLowerCase().trim();
+    try {
+      const lockKeys = await this.redis.client.keys(`login:*:${userEmail}:*`);
+      if (lockKeys && lockKeys.length > 0) {
+        await this.redis.client.del(...lockKeys);
+      }
+    } catch {
+      await this.redis.del(`login:lock:${userEmail}:${ip}`).catch(() => {});
+      await this.redis.del(`login:fail:${userEmail}:${ip}`).catch(() => {});
+    }
   }
 
   private async buildSession(user: User, ip: string, userAgent?: string) {

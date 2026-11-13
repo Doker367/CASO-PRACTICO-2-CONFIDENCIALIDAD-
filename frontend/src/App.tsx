@@ -210,6 +210,8 @@ export default function App() {
                 </RequirePermission>
               }
             />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="*" element={<Navigate to="/products" replace />} />
           </Routes>
         </main>

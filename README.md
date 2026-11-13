@@ -48,6 +48,8 @@ docker compose up --build
 | API REST | https://localhost:8443/api/v1 |
 | MailHog | http://localhost:8026 |
 
+Si el puerto HTTP `8080` ya está ocupado, define `FRONTEND_HTTP_PORT=8081` en `.env` y usa `http://localhost:8081`.
+
 > El certificado TLS es **autofirmado** (demo académica): acepta la advertencia del navegador en `https://localhost:8443`. En producción se usa un certificado de una CA pública (Let's Encrypt u otro).
 
 ### Usuarios semilla
